@@ -1,41 +1,37 @@
-const int pinoRele = 8; //PINO DIGITAL UTILIZADO PELO MÓDULO RELÉ
-const int sensorTensao = A2; //PINO ANALÓGICO UTILIZADO PELO SENSOR DE TENSÃO AC
+ #include "EmonLib.h" //INCLUSÃO DE BIBLIOTECA
 
-int status = 0; //VARIÁVEL QUE CONTROLA O STATUS DO MÓDULO RELÉ (LIGADO / DESLIGADO)
-String statusLamp = "DESLIGADA"; //VARIÁVEL PARA CONTROLE DE STATUS MOSTRADO NO MONITOR SERIAL
+#define VOLT_CAL 211.6 //VALOR DE CALIBRAÇÃO (DEVE SER AJUSTADO EM PARALELO COM UM MULTÍMETRO)
 
-void setup(){
-  pinMode(pinoRele, OUTPUT); //DEFINE A PORTA COMO SAÍDA
-  pinMode(sensorTensao, INPUT); //DEFINE A PORTA COMO ENTRADA
-  digitalWrite(pinoRele, LOW); //MÓDULO RELÉ INICIA DESLIGADO
+EnergyMonitor emon1; //CRIA UMA INSTÂNCIA
+String statusTensao = "DESLIGADA"; //VARIÁVEL PARA CONTROLE DE STATUS MOSTRADO NO MONITOR SERIAL
+
+
+void setup(){  
   Serial.begin(9600); //INICIALIZA A SERIAL
+  emon1.voltage(2, VOLT_CAL, 1.7); //PASSA PARA A FUNÇÃO OS PARÂMETROS (PINO ANALÓGIO / VALOR DE CALIBRAÇÃO / MUDANÇA DE FASE)
 }
-   
+
 void loop(){
+  emon1.calcVI(17,2000); //FUNÇÃO DE CÁLCULO (17 SEMICICLOS, TEMPO LIMITE PARA FAZER A MEDIÇÃO)    
+  
+  float supplyVoltage   = emon1.Vrms; //VARIÁVEL RECEBE O VALOR DE TENSÃO RMS OBTIDO
 
-verificaStatusLamp(); //CHAMA A FUNÇÃO RESPONSÁVEL POR VERIFICAR SE A LÂMPADA ESTÁ ACESA OU APAGADA
+  Serial.print("TENSÃO"); //IMPRIME O TEXTO NO MONITOR SERIAL
+  Serial.println(statusTensao); //IMPRIME NO MONITOR SERIAL O ESTADO ATUAL DA LÂMPADA
+  Serial.print("  "); //IMPRIME O TEXTO NO MONITOR SERIAL
 
-char c = Serial.read(); //VARIÁVEL RESPONSÁVEL POR RECEBER O CARACTERE DIGITADO NA JANELA SERIAL
-
-  if (c == 'a'){ //SE CARACTER DIGITADO FOR IGUAL A "a", FAZ
-    if (status == 0){ //SE VARIÁVEL FOR IGUAL A 0, FAZ
-      digitalWrite(pinoRele, HIGH); //RELÉ ACIONADO (LIGADO)
-      status = 1; //VARIÁVEL RECEBE O VALOR 1
-    }else{ //SENÃO, FAZ
-      digitalWrite(pinoRele, LOW); //RELÉ ACIONADO (DESLIGADO)
-      status = 0; //VARIÁVEL RECEBE O VALOR 0
-    }
-  }
-  Serial.print("LAMPADA: "); //IMPRIME O TEXTO NO MONITOR SERIAL
-  Serial.println(statusLamp); //IMPRIME NO MONITOR SERIAL O ESTADO ATUAL DA LÂMPADA
-}
-//FUNÇÃO RESPONSÁVEL POR VERIFICAR SE A LÂMPADA ESTÁ ACESA OU APAGADA
-void verificaStatusLamp(){
-  for (int i = 0; i < 100; i++){ //PARA "i" IGUAL A 0, ENQUANTO "i" MENOR QUE 100, INCREMENTA "i"
-    if(analogRead(sensorTensao) > 70){ //SE LEITURA FOR MAIOR QUE 70, FAZ
-        statusLamp = "LIGADA"; //VARIÁVEL RECEBE O TEXTO
-    }else{ //SENÃO
-      statusLamp = "DESLIGADA"; //VARIÁVEL RECEBE O TEXTO
-    }
-  }
-}
+  Serial.print("Tensão medida na rede AC: "); //IMPRIME O TEXTO NA SERIAL
+  Serial.print(supplyVoltage, 0); //IMPRIME NA SERIAL O VALOR DE TENSÃO MEDIDO E REMOVE A PARTE DECIMAL
+  Serial.println("V"); //IMPRIME O TEXTO NA SERIAL
+  delay(1000);
+  
+  if((supplyVoltage) > 70){
+    
+      statusTensao = "LIGADA"; //VARIÁVEL RECEBE O TEXTO
+      
+    }else{
+      
+      statusTensao = "DESLIGADA"; //VARIÁVEL RECEBE O TEXTO
+      
+     }  
+   }
