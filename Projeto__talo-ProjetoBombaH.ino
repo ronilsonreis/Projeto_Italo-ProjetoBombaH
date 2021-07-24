@@ -1,131 +1,116 @@
- #include "EmonLib.h" //INCLUSÃO DE BIBLIOTECA
- #define VOLT_CAL 211.6 //VALOR DE CALIBRAÇÃO (DEVE SER AJUSTADO EM PARALELO COM UM MULTÍMETRO)
+/* Este código funciona com o sensor de tensão CA ESP8266 12E e ZMPT101B
+ * Pode medir o TRMS de qualquer tensão até 250 VAC 50 / 60Hz e enviar os valores para Adafruit MQTT
+ */
+#include <ESP8266WiFi.h>                         // Bibliotecas necessárias
+#include <Adafruit_MQTT.h>
+#include <Adafruit_MQTT_Client.h>
+#include <Filters.h>
 
-/*
-     CÓDIGO:    R0001
-     AUTOR:     Ronilson de Lima Reis
-     PROJETO:   BOMBA AUTOMATIZADA 
-     DATA:      11/07/2021
-*/
+#define WLAN_SSID       "AP-TI"               // Seu SSID WiFi e senha
+#define WLAN_PASS       "w!fi@16#"
 
+#define AIO_SERVER      "io.adafruit.com"
+#define AIO_SERVERPORT  1883                  
 
-// INCLUSÃO DE BIBLIOTECAS
-#include <SPI.h>
-#include <Ethernet.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#define AIO_USERNAME  "informatica_italo"
+#define AIO_KEY       "aio_ZlGs23V4QB7iQJa13DF2lyu5mi0l"
 
-// DEFINIÇÕES DE PINOS
-#define OLED_RESET   -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+#define ZMPT101B A0                          //ZMPT101B analog pin
+ 
+int Current_Time=0, Previous_Time=0, Period=10000;  //Enviamos um valor a cada 10s, o máximo é 30 valores por minuto
 
-// DEFINIÇÕES
-#define mtIDENTIFICAR 0
-#define mtGET         1
-#define mtPOST        2
-#define mtOUTRO       3
+float testFrequency = 50;                    // frequência do sinal de teste (Hz)
+float windowLength = 100/testFrequency;      // quanto tempo para calcular a média do sinal, para estatísticas
 
-#define SCREEN_WIDTH  128 // OLED display, largura em pixels
-#define SCREEN_HEIGHT 32  // OLED display, altura em pixels
-
-// INSTANCIANDO OBJETOS
-IPAddress ip(10, 0, 0, 28);
-EthernetServer server(80);
-EthernetClient client;
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-
-// DECLARAÇÃO DE VARIÁVEIS
-byte mac[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};     // MAC ADDRES
-byte pinCanais[1] = {A0};
-
-EnergyMonitor emon1; //CRIA UMA INSTÂNCIA
-String statusTensao = "DESLIGADA"; //VARIÁVEL PARA CONTROLE DE STATUS MOSTRADO NO MONITOR SERIAL
-
-//DECLARAÇÂO DE FUNÇÔES
-void setup_Ethernet();
-void setup_Voltagem();
-
-void setup_Voltagem(){  
-  Serial.begin(9600); //INICIALIZA A SERIAL
-  emon1.voltage(2, VOLT_CAL, 1.7); //PASSA PARA A FUNÇÃO OS PARÂMETROS (PINO ANALÓGIO / VALOR DE CALIBRAÇÃO / MUDANÇA DE FASE)
-}
+int RawValue = 0;
 
 
-void setup_Ethernet() {
+float intercept = 0; // a ser ajustado com base no teste de calibração
+float slope = 1;     // a ser ajustado com base no teste de calibração
+float Volts_TRMS;    // tensão real estimada em Volts
+
+WiFiClient client;
+Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+Adafruit_MQTT_Publish Test = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/Bomba1");        //My feed name is "Bomba1" so pay attention to yours, remplace it at the name and "/feeds/Test"
+RunningStatistics inputStats;
+
+void setup() {
+  
   Serial.begin(115200);
+  delay(10);
+  inputStats.setWindowSecs( windowLength );
+  Serial.println();
+  Serial.print("Conectando à ");
+  Serial.println(WLAN_SSID);
 
-  for (byte nL = 0; nL < 10; nL++) {
-    pinMode(pinCanais[nL], OUTPUT);
+  WiFi.begin(WLAN_SSID, WLAN_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
   }
+  Serial.println();
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Endereço 0x3C para o 128x32
-    Serial.println(F("SSD1306 falha no modulo"));
-    while (true);
-  }
-
-  // LIMPA O BUFFER E CONFIGURA O DISPLAY
-  display.clearDisplay();
-  display.display();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
-  display.print(F("Configurando a Shield ..."));
-  display.display();
-  delay(1000); // DELAY PARA EXIBIR MENSAGEM
-
-  Ethernet.begin(mac, ip);
-
-  // Check for Ethernet hardware present
-  if (Ethernet.hardwareStatus() == EthernetNoHardware) {
-    Serial.println("Ethernet shield não encontrada. verifique o hardware :( ");
-    display.clearDisplay();
-    display.print("Shield não encontrada");
-    display.display();
-
-    while (true) {
-      delay(1); // do nothing, no point running without Ethernet hardware
-    }
-  }
-  if (Ethernet.linkStatus() == LinkOFF) {
-    Serial.println("Cabo desconectado.");
-    display.clearDisplay();
-    display.print("Cabo desconectado.");
-    display.display();
-  }
-
-  server.begin();
-  Serial.print("IP do servidor: ");
-  Serial.println(Ethernet.localIP());
-
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.print(F("IP: "));
-  display.print(Ethernet.localIP());
-  display.display();
+  Serial.println("Wi-Fi conectado");
+  Serial.println("Endereço de IP: "); 
+  Serial.println(WiFi.localIP());
 
 }
 
-void loop(){
-  emon1.calcVI(17,2000); //FUNÇÃO DE CÁLCULO (17 SEMICICLOS, TEMPO LIMITE PARA FAZER A MEDIÇÃO)    
+void loop() {
   
-  float supplyVoltage   = emon1.Vrms; //VARIÁVEL RECEBE O VALOR DE TENSÃO RMS OBTIDO
+  Volts_TRMS=ReadVoltage(); // Lemos a tensão, normalmente a função retorna o valor Volts_TRMS, você pode fazer isso diretamente no Test.publish
+                            // Mas esta é a sintaxe que funcionou para mim, retorne um valor para ela mesma: D
+  MQTT_connect();           // Mantenha o MQTT conectado
+  Current_Time=millis();
 
-  Serial.print("TENSÃO"); //IMPRIME O TEXTO NO MONITOR SERIAL
-  Serial.println(statusTensao); //IMPRIME NO MONITOR SERIAL O ESTADO ATUAL DA LÂMPADA
-  Serial.print("  "); //IMPRIME O TEXTO NO MONITOR SERIAL
-
-  Serial.print("Tensão medida na rede AC: "); //IMPRIME O TEXTO NA SERIAL
-  Serial.print(supplyVoltage, 0); //IMPRIME NA SERIAL O VALOR DE TENSÃO MEDIDO E REMOVE A PARTE DECIMAL
-  Serial.println("V"); //IMPRIME O TEXTO NA SERIAL
-  delay(1000);
+  if(Current_Time - Previous_Time >= Period){  // A cada período enviamos o valor para o prestador de serviço
+  Serial.print(F("\nEnvio de valor "));         // O valor também é mostrado no monitor serial
+  Serial.print(Volts_TRMS);
+  Serial.print("...");
+  if (! Test.publish(Volts_TRMS)) {
+    Serial.println(F("Fracassado"));
+  } else {
+    Serial.println(F("OK!"));
+  }
+  Previous_Time = Current_Time;
   
-  if((supplyVoltage) > 70){
-    
-      statusTensao = "LIGADA"; //VARIÁVEL RECEBE O TEXTO
-      
-    }else{
-      
-      statusTensao = "DESLIGADA"; //VARIÁVEL RECEBE O TEXTO
-      
-     }  
-   }
+  }
+
+}
+
+void MQTT_connect() {                  // Reconectar automaticamente ao MQTT, caso contrário, ele acionará uma reinicialização do watchdog
+  int8_t ret;
+
+  // Pare se já estiver conectado.
+  if (mqtt.connected()) {
+    return;
+  }
+
+  Serial.print("Conectando ao MQTT ...");
+
+  uint8_t retries = 3;
+  while ((ret = mqtt.connect()) != 0) { // conectar retornará 0 para conectado
+       Serial.println(mqtt.connectErrorString(ret));
+       Serial.println("Tentando novamente a conexão MQTT em 1 segundo ...");
+       mqtt.disconnect();
+       delay(1000);  // wait 1 seconds
+       retries--;
+       if (retries == 0) {
+         // basicamente morrer e esperar que o WDT me reinicie
+         while (1);
+       }
+  }
+  Serial.println("MQTT conectado!");
+}
+
+float ReadVoltage(){
+  
+      RawValue = analogRead(ZMPT101B);  // leia o valor analógico:
+      inputStats.input(RawValue);  // logar na função Stats
+     
+      Volts_TRMS = inputStats.sigma()* slope + intercept;
+     // Volts_TRMS = Volts_TRMS*0.979;
+
+      return Volts_TRMS;
+       
+}
